@@ -39,7 +39,7 @@ use crate::{
 };
 
 pub mod handles;
-pub mod util;
+mod util;
 
 /// ALPN protocol name
 pub const GOSSIP_ALPN: &[u8] = b"/iroh-gossip/1";

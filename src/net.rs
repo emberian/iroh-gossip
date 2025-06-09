@@ -14,7 +14,8 @@ use futures_concurrency::stream::{stream_group, StreamGroup};
 use futures_util::FutureExt as _;
 use iroh::{
     endpoint::{Connection, DirectAddr},
-    protocol::ProtocolHandler,
+    protocol::{AcceptError, ProtocolHandler},
+    watcher::Watcher,
     Endpoint, NodeAddr, NodeId, PublicKey, RelayUrl,
 };
 use n0_future::{
@@ -95,10 +96,22 @@ pub enum Error {
     Read(#[from] util::ReadError),
     /// A watchable disconnected.
     #[error(transparent)]
-    WatchableDisconnected(#[from] iroh::watchable::Disconnected),
+    WatchableDisconnected(#[from] iroh::watcher::Disconnected),
     /// Iroh connection error
     #[error(transparent)]
     IrohConnection(#[from] iroh::endpoint::ConnectionError),
+    /// Remote node id error
+    #[error(transparent)]
+    RemoteNodeIdError(#[from] iroh::endpoint::RemoteNodeIdError),
+    /// Connect error
+    #[error(transparent)]
+    ConnectError(#[from] iroh::endpoint::ConnectError),
+    /// Bind error
+    #[error(transparent)]
+    BindError(#[from] iroh::endpoint::BindError),
+    /// Accept error
+    #[error(transparent)]
+    AcceptError(#[from] AcceptError),
     /// Errors coming from `iroh`
     #[error(transparent)]
     Iroh(#[from] anyhow::Error),
@@ -155,15 +168,21 @@ pub(crate) struct Inner {
 }
 
 impl ProtocolHandler for Gossip {
-    fn accept(&self, conn: Connection) -> BoxFuture<anyhow::Result<()>> {
+    fn accept(
+        &self,
+        conn: Connection,
+    ) -> impl futures_util::Future<Output = Result<(), AcceptError>> + std::marker::Send {
         let inner = self.inner.clone();
         Box::pin(async move {
-            inner.handle_connection(conn).await?;
+            inner
+                .handle_connection(conn)
+                .await
+                .map_err(AcceptError::from_err)?;
             Ok(())
         })
     }
 
-    fn shutdown(&self) -> BoxFuture<()> {
+    fn shutdown(&self) -> impl futures_util::Future<Output = ()> + std::marker::Send {
         let this = self.clone();
         Box::pin(async move {
             if let Err(err) = this.shutdown().await {
@@ -1959,7 +1978,7 @@ mod test {
             let secret_key = SecretKey::generate(&mut rng);
             async move {
                 let (router, gossip) = spawn_gossip(secret_key, relay_map).await?;
-                let addr = router.endpoint().node_addr().await?;
+                let addr = router.endpoint().node_addr().get().unwrap().unwrap();
                 info!(node_id = %addr.node_id.fmt_short(), "recv node spawned");
                 addr_tx.send(addr).unwrap();
                 let mut topic = gossip.subscribe_and_join(topic_id, vec![]).await?;
